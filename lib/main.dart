@@ -1,15 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:bluetooth_classic/bluetooth_classic.dart';
+import 'package:bluetooth_classic/models/device.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:just_audio/just_audio.dart';
 import 'dart:typed_data';
 
-enum BluetoothStatus {
-  unknown,
-  on,
-  off,
-}
+enum BluetoothStatus { unknown, on, off }
 
 void main() {
   runApp(MaterialApp(home: BluetoothApp()));
@@ -25,12 +22,13 @@ class BluetoothApp extends StatefulWidget {
 class _BluetoothAppState extends State<BluetoothApp> {
   BluetoothStatus _bluetoothState = BluetoothStatus.unknown;
   bool isConnected = false;
-  List<BluetoothDevice> devices = [];
-  List<BluetoothDevice> connectedDevices = [];
+  List<Device> devices = [];
+  List<Device> connectedDevices = [];
   Color backgroundColor = Colors.white;
   bool isBluetoothOn = true;
   final player = AudioPlayer();
   late final VolumeController _volumeController;
+  final BluetoothClassic _bluetooth = BluetoothClassic();
 
   @override
   void initState() {
@@ -59,13 +57,17 @@ class _BluetoothAppState extends State<BluetoothApp> {
   }
 
   void getBondedDevices() async {
-    devices = await BluetoothClassic.getBondedDevices(); // Use static method directly
-    setState(() {});
+    try {
+      devices = await _bluetooth.getPairedDevices();
+      setState(() {});
+    } catch (e) {
+      print('Error getting paired devices: $e');
+    }
   }
 
-  void connectToDevice(BluetoothDevice device) async {
+  void connectToDevice(Device device) async {
     try {
-      await BluetoothClassic.connect(device.address); // Use static connect method
+      await _bluetooth.connect(device.address, 'SPP');
       print('Connected to device ✅');
 
       setState(() {
@@ -73,15 +75,15 @@ class _BluetoothAppState extends State<BluetoothApp> {
         connectedDevices.add(device);
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Device Connected Successfully')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Device Connected Successfully')));
     } catch (e) {
       print('Cannot connect, exception occurred');
       print(e);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to connect to device')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to connect to device')));
     }
   }
 
@@ -151,9 +153,9 @@ class _BluetoothAppState extends State<BluetoothApp> {
     }
 
     if (message.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
 
     setState(() {});
@@ -165,11 +167,11 @@ class _BluetoothAppState extends State<BluetoothApp> {
         SnackBar(content: Text('No devices are currently connected.')),
       );
     } else {
-      for (BluetoothDevice device in connectedDevices) {
+      for (Device device in connectedDevices) {
         print('Connected Device: ${device.name} (${device.address})');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Connected: ${device.name}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Connected: ${device.name}')));
       }
     }
   }
@@ -204,7 +206,7 @@ class _BluetoothAppState extends State<BluetoothApp> {
               child: ListView.builder(
                 itemCount: devices.length,
                 itemBuilder: (context, index) {
-                  BluetoothDevice device = devices[index];
+                  Device device = devices[index];
                   return ListTile(
                     title: Text(device.name ?? "Unknown"),
                     subtitle: Text(device.address),
