@@ -4,7 +4,7 @@ import 'package:bluetooth_classic/models/device.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:just_audio/just_audio.dart';
-import 'dart:typed_data';
+import 'package:flutter/services.dart';
 
 enum BluetoothStatus { unknown, on, off }
 
@@ -30,22 +30,31 @@ class _BluetoothAppState extends State<BluetoothApp> {
   late final VolumeController _volumeController;
   final BluetoothClassic _bluetooth = BluetoothClassic();
 
+  // Platform channel for native communication
+  static const platform = MethodChannel('com.yourcompany.bluetooth');
+
   @override
   void initState() {
     super.initState();
     _volumeController = VolumeController();
     _volumeController.showSystemUI = false;
+
+    // Set up the platform channel handler
+    platform.setMethodCallHandler(_handleNativeMethodCall);
+
     initBluetooth();
   }
 
   Future<void> initBluetooth() async {
     if (await Permission.bluetoothScan.request().isGranted &&
         await Permission.bluetoothConnect.request().isGranted &&
-        await Permission.locationWhenInUse.request().isGranted) {
+        await Permission.locationWhenInUse.request().isGranted &&
+        await Permission.phone.request().isGranted) {
       print('Bluetooth permissions granted ✅');
       setState(() {
         _bluetoothState = BluetoothStatus.on;
       });
+      startBluetoothReading();
     } else {
       print('Bluetooth permissions not granted ❌');
       setState(() {
@@ -54,6 +63,15 @@ class _BluetoothAppState extends State<BluetoothApp> {
     }
 
     getBondedDevices();
+  }
+
+  // Handle native method calls (data from Bluetooth)
+  Future<void> _handleNativeMethodCall(MethodCall call) async {
+    if (call.method == 'onDataReceived') {
+      String data = call.arguments as String;
+      print('Received from native: $data');
+      handleIncomingData(data);
+    }
   }
 
   void getBondedDevices() async {
@@ -67,31 +85,28 @@ class _BluetoothAppState extends State<BluetoothApp> {
 
   void connectToDevice(Device device) async {
     try {
-      await _bluetooth.connect(device.address, 'SPP');
+      await _bluetooth.connect(
+        device.address,
+        '00001101-0000-1000-8000-00805F9B34FB',
+      );
       print('Connected to device ✅');
-
       setState(() {
         isConnected = true;
         connectedDevices.add(device);
       });
-
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Device Connected Successfully')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Device Connected Successfully')));
     } catch (e) {
-      print('Cannot connect, exception occurred');
-      print(e);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to connect to device')));
+      print('Cannot connect, exception occurred: $e');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to connect to device')));
     }
   }
 
+  // Handle ASCII commands
   void handleIncomingData(String data) async {
     String message = '';
 
     switch (data) {
-      case 'A': // Volume Up
+      case 'R':
         double currentVolume = await _volumeController.getVolume();
         double newVolume = (currentVolume + 0.1).clamp(0.0, 1.0);
         _volumeController.setVolume(newVolume);
@@ -99,7 +114,7 @@ class _BluetoothAppState extends State<BluetoothApp> {
         message = 'Volume Up';
         break;
 
-      case 'B': // Volume Down
+      case 'A':
         double currentVolume = await _volumeController.getVolume();
         double newVolume = (currentVolume - 0.1).clamp(0.0, 1.0);
         _volumeController.setVolume(newVolume);
@@ -107,29 +122,31 @@ class _BluetoothAppState extends State<BluetoothApp> {
         message = 'Volume Down';
         break;
 
-      case 'C':
+      case 'K': // Answer Call
+        await answerCall();
         backgroundColor = Colors.blueAccent;
-        message = 'Pick Up Call (Future)';
+        message = 'Answered Call';
         break;
 
-      case 'D':
+      case 'S': // Hang Up Call
+        await hangUpCall();
         backgroundColor = Colors.orangeAccent;
-        message = 'Hang Up Call (Future)';
+        message = 'Hung Up Call';
         break;
 
-      case 'E': // Next track
+      case 'H':
         await player.seekToNext();
         backgroundColor = Colors.purpleAccent;
         message = 'Next Track';
         break;
 
-      case 'F': // Previous track
+      case 'I':
         await player.seekToPrevious();
         backgroundColor = Colors.tealAccent;
         message = 'Previous Track';
         break;
 
-      case 'G': // Play/Pause
+      case 'T':
         if (player.playing) {
           await player.pause();
           message = 'Paused Music';
@@ -141,7 +158,7 @@ class _BluetoothAppState extends State<BluetoothApp> {
         }
         break;
 
-      case 'H': // Bluetooth ON/OFF (Visual only)
+      case 'Y':
         isBluetoothOn = !isBluetoothOn;
         backgroundColor = isBluetoothOn ? Colors.lightBlueAccent : Colors.grey;
         message = isBluetoothOn ? 'Bluetooth ON' : 'Bluetooth OFF';
@@ -153,12 +170,26 @@ class _BluetoothAppState extends State<BluetoothApp> {
     }
 
     if (message.isNotEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
     }
 
     setState(() {});
+  }
+
+  Future<void> answerCall() async {
+    try {
+      await platform.invokeMethod('answerCall');
+    } catch (e) {
+      print("Failed to answer call: $e");
+    }
+  }
+
+  Future<void> hangUpCall() async {
+    try {
+      await platform.invokeMethod('hangUpCall');
+    } catch (e) {
+      print("Failed to hang up call: $e");
+    }
   }
 
   void checkConnectedDevices() {
@@ -169,10 +200,26 @@ class _BluetoothAppState extends State<BluetoothApp> {
     } else {
       for (Device device in connectedDevices) {
         print('Connected Device: ${device.name} (${device.address})');
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Connected: ${device.name}')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Connected: ${device.name}')));
       }
+    }
+  }
+
+  void startBluetoothReading() async {
+    try {
+      final result = await platform.invokeMethod('startReading');
+      print(result);
+    } on PlatformException catch (e) {
+      print("Failed to start reading: '${e.message}'");
+    }
+  }
+
+  void stopBluetoothReading() async {
+    try {
+      final result = await platform.invokeMethod('stopReading');
+      print(result);
+    } on PlatformException catch (e) {
+      print("Failed to stop reading: '${e.message}'");
     }
   }
 
@@ -201,6 +248,14 @@ class _BluetoothAppState extends State<BluetoothApp> {
             ElevatedButton(
               onPressed: checkConnectedDevices,
               child: Text('Check Connected Devices'),
+            ),
+            ElevatedButton(
+              onPressed: startBluetoothReading,
+              child: Text('Start Bluetooth Reading'),
+            ),
+            ElevatedButton(
+              onPressed: stopBluetoothReading,
+              child: Text('Stop Bluetooth Reading'),
             ),
             Expanded(
               child: ListView.builder(
